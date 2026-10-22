@@ -350,11 +350,18 @@ def test_shared_page_is_one_file_with_the_cards_and_only_the_cited_paragraphs(we
     assert page.count("</script>") == 2 and page.count("</style>") == 1
     assert 'render("<\\!---->", "<\\/script>")' in page and '"<\\/style>"' in page
     data = shared_data(page)
-    assert set(data) == {"run", "review", "cards", "bib", "exported_at", "version"}
+    assert set(data) == {"run", "review", "cards", "graph", "papers", "bib", "exported_at", "version"}
     assert "cost" not in data["run"] and "notes" not in data["review"] and "Run report" not in page
     assert data["run"]["question"] == run.settings.question and data["run"]["screened"] > 0
     assert data["bib"] == (run.folder / "refs.bib").read_text()
-    assert {r["bibcode"] for r in data["review"]["references"]} == set(data["cards"])
+    assert data["graph"] == api.get(f"/api/runs/{run.run_id}/graph").json()
+    assert data["papers"] == [{k: v for k, v in p.items() if k not in ("newer_text", "rank")}
+                              for p in api.get(f"/api/runs/{run.run_id}/papers").json()]
+    # Every paper read has its card, cited or not, so each one in the graph and the papers table opens it.
+    assert set(data["cards"]) == {r["bibcode"] for r in lib.cards(run.run_id)}
+    assert {p["bibcode"] for p in data["papers"] if p["card"]} == set(data["cards"])
+    assert {n["bibcode"] for n in data["graph"]["nodes"]} <= set(data["cards"])
+    assert {r["bibcode"] for r in data["review"]["references"]} < set(data["cards"])
     for b, card in data["cards"].items():
         items = [it for kind in ("methods", "findings", "limitations") for it in card[kind]]
         assert all(len(it["quotes"]) <= 1 for it in items)

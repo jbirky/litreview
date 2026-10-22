@@ -1,9 +1,11 @@
 <script>
   import { day } from "../lib/format.js";
   import { go, href, route } from "../lib/router.svelte.js";
+  import CitationGraph from "../components/CitationGraph.svelte";
   import EvidencePanel from "../components/EvidencePanel.svelte";
   import MathText from "../components/MathText.svelte";
   import ReviewText from "../components/ReviewText.svelte";
+  import RunPapers from "../components/RunPapers.svelte";
   import Timeline from "../components/Timeline.svelte";
 
   // A review exported as one file (litreview/web/share.py). Everything it shows came with the page;
@@ -11,16 +13,19 @@
   let { data } = $props();
   let { run, review, cards } = $derived(data);
 
-  let tab = $derived(route.parts[0] === "timeline" ? "timeline" : "review");
-  let cite = $derived(cards[route.query.cite] ? route.query.cite : null);
-
-  const citeHref = (b) => href([tab], { cite: b });
-  const ads = (b) => `https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(b)}/abstract`;
-  let bibHref = $derived(data.bib ? "data:application/x-bibtex;charset=utf-8," + encodeURIComponent(data.bib) : null);
   const TABS = [
     ["review", "Review"],
     ["timeline", "Timeline"],
+    ["graph", "Citation graph"],
+    ["papers", "Papers"],
   ];
+  let tab = $derived(TABS.some(([key]) => key === route.parts[0]) ? route.parts[0] : "review");
+  let cite = $derived(cards[route.query.cite] ? route.query.cite : null);
+
+  const citeHref = (b) => href([tab], { cite: b });
+  const openCard = (b) => go([tab], { cite: b }, { replace: true });
+  const ads = (b) => `https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(b)}/abstract`;
+  let bibHref = $derived(data.bib ? "data:application/x-bibtex;charset=utf-8," + encodeURIComponent(data.bib) : null);
 </script>
 
 <header class="topbar">
@@ -43,7 +48,9 @@
       <p>
         Claude searched NASA ADS with litreview, read the papers it selected, and wrote this review from the evidence cards
         it took from them. Every citation is to one of those papers: click one to see the paper's card, and a passage under
-        a card item to see the paragraph it came from.
+        a card item to see the paragraph it came from. The <strong>Citation graph</strong> tab shows which of the papers read
+        cite each other, and <strong>Papers</strong> lists every paper screened, with the score and reason for keeping or
+        leaving it out.
       </p>
       {#if run.queries.length}
         <p>ADS queries:</p>
@@ -79,8 +86,12 @@
             </ol>
           </section>
         {/if}
+      {:else if tab === "timeline"}
+        <Timeline {review} selected={cite} onCite={openCard} />
+      {:else if tab === "graph"}
+        <CitationGraph shared={data.graph} selected={cite} onCite={openCard} />
       {:else}
-        <Timeline {review} selected={cite} onCite={(b) => go([tab], { cite: b }, { replace: true })} />
+        <RunPapers papers={data.papers} shared selected={cite} onCard={openCard} />
       {/if}
     </div>
     {#if cite}

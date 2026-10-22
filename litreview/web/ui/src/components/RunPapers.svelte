@@ -7,8 +7,9 @@
 
   // Every paper this run screened or read; a card opens the evidence panel. On a finished review,
   // papers it didn't read, here or found in ADS, can be ticked to read them and write the review again,
-  // and so can papers it read whose newer text (such as an uploaded PDF) it hasn't read.
-  let { papers, run = null, selected = null, onCard, onChange = null } = $props();
+  // and so can papers it read whose newer text (such as an uploaded PDF) it hasn't read. On a shared
+  // page (litreview/web/share.py) papers link to ADS.
+  let { papers, run = null, selected = null, onCard, onChange = null, shared = false } = $props();
   let show = $state("read");
   let picked = $state([]);
   let names = $state({});
@@ -34,6 +35,7 @@
   let unread = $derived(papers.filter(FILTERS[2][2]).length);
   let newer = $derived(papers.filter((p) => p.newer_text).length);
   let rereading = $derived(picked.filter((b) => papers.find((p) => p.bibcode === b)?.selected).length);
+  const ads = (b) => `https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(b)}/abstract`;
 </script>
 
 {#if canAdd}
@@ -75,7 +77,10 @@
                                                     aria-label="{p.selected ? 'Read again' : 'Add'} {p.title}" />{/if}</td>
           {/if}
           <td>
-            <div><a href={href(["paper", p.bibcode])}><MathText text={p.title} /></a></div>
+            <div>
+              {#if shared}<a href={ads(p.bibcode)} target="_blank" rel="noreferrer"><MathText text={p.title} /></a>
+              {:else}<a href={href(["paper", p.bibcode])}><MathText text={p.title} /></a>{/if}
+            </div>
             <div class="muted small">{p.year ?? "n.d."} · {authors(p)} · {p.journal || "preprint"}{#if p.cited} · <span class="pill ok">cited</span>{/if}</div>
           </td>
           <td class="nowrap">{p.score ?? "—"}{#if p.round === "expand"} <span class="muted small" title="found through the citation graph">graph</span>{/if}</td>

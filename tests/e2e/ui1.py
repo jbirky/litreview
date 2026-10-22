@@ -241,10 +241,36 @@ def share(page, url, run_id):
     page.locator(".timeline .paper").first.click()
     expect(page.locator(".panel .items").first).to_be_visible()
     page.screenshot(path=SHOTS / "share-timeline.png")
+
+    # Every paper in the citation graph opens its card, cited or not, and no link leads to a paper page.
+    page.locator(".tabs a", has_text="Citation graph").click()
+    nodes = page.locator(".graph .node")
+    expect(nodes.first).to_be_visible()
+    n_nodes = nodes.count()
+    for k in range(n_nodes):
+        nodes.nth(k).click()
+        expect(page.locator(".panel .paper-title")).not_to_be_empty()
+        assert "cite=" in page.url, k
+    assert page.locator("a[href^='#/paper/']").count() == 0
+    page.screenshot(path=SHOTS / "share-graph.png")
+
+    # The papers table lists every paper screened, and each paper read opens its card.
+    page.locator(".tabs a", has_text="Papers").click()
+    page.get_by_role("button", name=re.compile(r"^All screened \(")).click()
+    n_screened = page.locator(".table-wrap tbody tr").count()
+    page.get_by_role("button", name=re.compile(r"^Read \(")).click()
+    opens = page.locator(".table-wrap .linkish-pill")
+    assert opens.count() == n_nodes, (opens.count(), n_nodes)
+    for k in range(opens.count()):
+        opens.nth(k).click()
+        expect(page.locator(".panel .paper-title")).not_to_be_empty()
+    assert page.locator("a[href^='#/paper/']").count() == 0 and not page.locator(".adder").count()
+    page.screenshot(path=SHOTS / "share-papers.png")
     page.set_viewport_size({"width": 390, "height": 844})
     page.screenshot(path=SHOTS / "share-phone.png")
     assert not requests, requests
-    print(f"share: {path.name} offline, {n_chips} passages across {n_cards} cards each opened at its paragraph")
+    print(f"share: {path.name} offline, {n_chips} passages across {n_cards} cards each opened at its paragraph; "
+          f"{n_nodes} graph papers and {n_screened} screened papers")
 
 
 def graph(page, url, run_id):

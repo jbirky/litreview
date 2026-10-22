@@ -8,8 +8,9 @@
   // axis, with each link drawn as a bracket on the left from a paper to one it cites. Every paper
   // between the two sits to the right of the bracket, so no line crosses a label. Below, the papers
   // several of them cite that the review didn't read. Links come from ADS reference lists; papers
-  // stored without one can fetch it here, and gaps can be added to a finished review.
-  let { runId, run = null, selected = null, onCite, onChange = null, reloadKey = "" } = $props();
+  // stored without one can fetch it here, and gaps can be added to a finished review. A shared page
+  // passes the graph itself (litreview/web/share.py), and its papers link to ADS.
+  let { runId = null, run = null, selected = null, onCite, onChange = null, reloadKey = "", shared = null } = $props();
 
   const W = 1000;
   const PAD = 28;
@@ -66,6 +67,10 @@
     graph = null;
     error = "";
     picked = [];
+    if (shared) {
+      graph = shared;
+      return;
+    }
     load();
     return () => clearTimeout(timer);
   });
@@ -170,7 +175,7 @@
       </span>
       {#if fetching}
         <span class="pill accent working">fetching…</span>
-      {:else}
+      {:else if !shared}
         <button class="btn" onclick={fetchLinks} title="One ADS request for every 40 or so papers; no Claude cost">Get citation links from ADS</button>
       {/if}
       {#if queueError}<span class="err">{queueError}</span>{/if}
@@ -226,11 +231,13 @@
               {/if}
               <td class="num">{g.by.length}</td>
               <td>
-                {#if g.in_library}
+                {#if g.in_library && shared}
+                  <a href={ads(g.bibcode)} target="_blank" rel="noreferrer">{g.label}</a> <span class="muted"><MathText text={g.title} /></span>
+                {:else if g.in_library}
                   <a href={href(["paper", g.bibcode])}>{g.label}</a> <span class="muted"><MathText text={g.title} /></span>
                 {:else}
                   <a href={ads(g.bibcode)} target="_blank" rel="noreferrer">{g.bibcode}</a>
-                  <span class="muted">not in the library</span>
+                  {#if !shared}<span class="muted">not in the library</span>{/if}
                 {/if}
               </td>
               <td class="small">{found(g)}</td>

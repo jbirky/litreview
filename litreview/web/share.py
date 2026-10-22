@@ -1,5 +1,6 @@
-"""A review as one HTML file to send to people: the review, its timeline, each cited paper's
-evidence card with the paragraphs the card cites, and refs.bib.
+"""A review as one HTML file to send to people: the review, its timeline, the citation graph of the
+papers read, every paper screened or read, each paper read's evidence card with the paragraphs the
+card cites, and refs.bib.
 
     litreview share <run>                      # writes runs/<run>/share.html
     GET /api/runs/<run>/share?download=1       # the same page, from the web UI
@@ -76,14 +77,17 @@ def data(lib: Library, run_id: str, folder: Path) -> dict | None:
         return None
     del review["notes"]  # changes made after the revision, which belong to the run report
     detail = views.run_detail(lib, run_id)
+    # Every paper read, not just those cited, so each paper in the graph and the papers table opens its card.
     cards = {}
-    for r in review["references"]:
-        card = views.card_view(lib, run_id, r["bibcode"])
+    for c in lib.cards(run_id):
+        card = views.card_view(lib, run_id, c["bibcode"])
         if card:
             for kind in ("methods", "findings", "limitations"):
                 for it in card[kind]:
                     it["quotes"] = shown_quote(it["quotes"])
-            cards[r["bibcode"]] = {**card, "paragraphs": cited_paragraphs(lib, card)}
+            cards[c["bibcode"]] = {**card, "paragraphs": cited_paragraphs(lib, card)}
+    # Whether your library has a newer text of a paper only matters for adding papers, which the page can't.
+    papers = [{k: v for k, v in p.items() if k not in ("newer_text", "rank")} for p in views.run_papers(lib, run_id)]
     bib = folder / "refs.bib"
     return {
         "run": {"run_id": run_id, "question": row["question"], "created_at": row["created_at"],
@@ -91,6 +95,8 @@ def data(lib: Library, run_id: str, folder: Path) -> dict | None:
                 "queries": detail["queries"], "screened": len(lib.screening(run_id))},
         "review": review,
         "cards": cards,
+        "graph": views.graph_view(lib, run_id),
+        "papers": papers,
         "bib": bib.read_text() if bib.exists() else "",
         "exported_at": time.time(),
         "version": VERSION,

@@ -104,7 +104,7 @@
     {#if review}
       <p class="share small">
         <a class="btn" href="{shareUrl}?download=1" download
-           title="One HTML file that opens in any browser, with no server: the review, the timeline, each cited paper's card with the paragraphs it cites, and refs.bib. Costs and the run report stay out.">Download shareable page</a>
+           title="One HTML file that opens in any browser, with no server: the review, the timeline, the citation graph, the papers screened and read, each paper read's card with the paragraphs it cites, and refs.bib. Costs and the run report stay out.">Download shareable page</a>
         <a href={shareUrl} target="_blank" rel="noreferrer">Preview</a>
       </p>
     {/if}
