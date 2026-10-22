@@ -1,0 +1,37 @@
+[
+  {
+    "id": "hot-jupiter-origins",
+    "question": "How do hot Jupiters form and reach their short-period orbits?",
+    "gold_arxiv": "1801.06117",
+    "gold_title": "Origins of Hot Jupiters (ARA&A 2018)",
+    "until": 2017
+  },
+  {
+    "id": "exoplanet-occurrence",
+    "question": "How common are planets of different sizes and orbital periods, and how are planetary systems arranged?",
+    "gold_arxiv": "1410.4199",
+    "gold_title": "The Occurrence and Architecture of Exoplanetary Systems (ARA&A 2015)",
+    "until": 2014
+  },
+  {
+    "id": "exoplanet-atmospheres",
+    "question": "What have observations revealed about the chemical composition of exoplanet atmospheres?",
+    "gold_arxiv": "1904.03190",
+    "gold_title": "Exoplanetary Atmospheres: Key Insights, Challenges and Prospects (ARA&A 2019)",
+    "until": 2018
+  },
+  {
+    "id": "m-dwarf-habitability",
+    "question": "Can planets orbiting M dwarfs be habitable?",
+    "gold_arxiv": "1610.05765",
+    "gold_title": "The Habitability of Planets Orbiting M-dwarf Stars (Physics Reports 2016)",
+    "until": 2016
+  },
+  {
+    "id": "smbh-host-coevolution",
+    "question": "How do supermassive black hole masses relate to the properties of their host galaxies?",
+    "gold_arxiv": "1304.7762",
+    "gold_title": "Coevolution (Or Not) of Supermassive Black Holes and Host Galaxies (ARA&A 2013)",
+    "until": 2012
+  }
+]

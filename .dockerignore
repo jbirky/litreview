@@ -1,0 +1,10 @@
+.venv
+.env
+data
+runs
+tests
+**/__pycache__
+*.egg-info
+.pytest_cache
+litreview/web/ui/node_modules
+litreview/web/ui/dist

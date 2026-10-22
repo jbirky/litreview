@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "litreview"
+version = "0.1.0"
+description = "Chronological literature reviews from NASA ADS that cite only papers they have read"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "anthropic>=1.15",
+    "httpx>=0.28",
+    "pymupdf>=1.24",
+    "pylatexenc>=2.10,<3",
+    "beautifulsoup4>=4.12",
+    "lxml>=5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+web = ["fastapi>=0.115", "uvicorn>=0.30"]
+
+[project.scripts]
+litreview = "litreview.cli:main"
+
+[tool.setuptools]
+packages = ["litreview", "litreview.web"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["network: hits real ADS/arXiv/Claude APIs; run by hand"]
+addopts = "-m 'not network'"

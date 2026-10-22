@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 816" role="img" aria-label="The litreview pipeline: only papers stored in the library can be cited">
+<style>
+  :root { --bg: #ffffff; --ink: #1c1c1e; --quiet: #6c6b70; --edge: #8e8c86; --model: #c15f3c; --accent: #2b59c3; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161618; --ink: #ececee; --quiet: #9a9aa2; --edge: #77767d; --model: #e8926f; --accent: #7ea2ff; }
+  }
+  svg { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 13px; }
+  .bg { fill: var(--bg); }
+  .ink { fill: var(--ink); } .quiet { fill: var(--quiet); }
+  .code { fill: none; stroke: var(--edge); stroke-width: 1.25; }
+  .model { fill: var(--model); fill-opacity: 0.12; stroke: var(--model); stroke-width: 1.25; }
+  .lib { fill: var(--accent); fill-opacity: 0.12; stroke: var(--accent); stroke-width: 2; }
+  .wire { fill: none; stroke: var(--edge); stroke-width: 1.25; }
+  .head { fill: var(--edge); }
+  .b { font-weight: 600; } .s { font-size: 11.5px; }
+</style>
+<defs><marker id="pipe-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="head"/></marker></defs>
+<rect class="bg" width="760" height="816" rx="12"/>
+<text x="48" y="30" class="ink b" font-size="15">Only papers stored in the library can be cited</text>
+<rect x="48" y="50" width="14" height="12" rx="3" class="model"/>
+<text x="70" y="60" class="quiet s">Claude step</text>
+<rect x="176" y="50" width="14" height="12" rx="3" class="code"/>
+<text x="198" y="60" class="quiet s">Code step</text>
+<g class="wire"><path d="M268 152V176" marker-end="url(#pipe-arrow)"/><path d="M268 232V256" marker-end="url(#pipe-arrow)"/><path d="M268 312V336" marker-end="url(#pipe-arrow)"/><path d="M268 392V416" marker-end="url(#pipe-arrow)"/><path d="M268 472V496" marker-end="url(#pipe-arrow)"/><path d="M268 552V576" marker-end="url(#pipe-arrow)"/><path d="M268 632V656" marker-end="url(#pipe-arrow)"/><path d="M268 712V736" marker-end="url(#pipe-arrow)"/><path d="M488 364H536" marker-end="url(#pipe-arrow)"/><path d="M488 524H536" marker-end="url(#pipe-arrow)"/><path d="M536 444H488" marker-end="url(#pipe-arrow)"/><path d="M536 604H488" marker-end="url(#pipe-arrow)"/><path d="M536 684H488" marker-end="url(#pipe-arrow)"/><path d="M48 684H32V604H48" marker-end="url(#pipe-arrow)"/></g>
+<text x="56" y="648" class="quiet s">fails a check: revise once</text>
+<rect x="48" y="96" width="440" height="56" rx="8" class="model"/>
+<text x="64" y="119" class="ink b">1. Plan queries</text>
+<text x="472" y="119" class="quiet s" text-anchor="end">Claude</text>
+<text x="64" y="137" class="ink s">Turns the question into several ADS queries and a date range</text>
+<rect x="48" y="176" width="440" height="56" rx="8" class="code"/>
+<text x="64" y="199" class="ink b">2. Search ADS</text>
+<text x="472" y="199" class="quiet s" text-anchor="end">code</text>
+<text x="64" y="217" class="ink s">Runs the queries; later follows links from the best screened hits</text>
+<rect x="48" y="256" width="440" height="56" rx="8" class="model"/>
+<text x="64" y="279" class="ink b">3. Screen abstracts</text>
+<text x="472" y="279" class="quiet s" text-anchor="end">Claude</text>
+<text x="64" y="297" class="ink s">Keeps relevant papers, with a one-line reason for each decision</text>
+<rect x="48" y="336" width="440" height="56" rx="8" class="code"/>
+<text x="64" y="359" class="ink b">4. Fetch and store text</text>
+<text x="472" y="359" class="quiet s" text-anchor="end">code</text>
+<text x="64" y="377" class="ink s">arXiv full text when available, else the abstract, by paragraph</text>
+<rect x="48" y="416" width="440" height="56" rx="8" class="model"/>
+<text x="64" y="439" class="ink b">5. Extract evidence cards</text>
+<text x="472" y="439" class="quiet s" text-anchor="end">Claude, batched</text>
+<text x="64" y="457" class="ink s">Findings, methods, limitations, each tied to cited paragraphs</text>
+<rect x="48" y="496" width="440" height="56" rx="8" class="code"/>
+<text x="64" y="519" class="ink b">6. Verify cards</text>
+<text x="472" y="519" class="quiet s" text-anchor="end">code</text>
+<text x="64" y="537" class="ink s">Drops items with no passage; what remains forms the citable set</text>
+<rect x="48" y="576" width="440" height="56" rx="8" class="model"/>
+<text x="64" y="599" class="ink b">7. Write the chronological draft</text>
+<text x="472" y="599" class="quiet s" text-anchor="end">Claude</text>
+<text x="64" y="617" class="ink s">Sees only citable cards; cites as [@bibcode], never as text</text>
+<rect x="48" y="656" width="440" height="56" rx="8" class="code"/>
+<text x="64" y="679" class="ink b">8. Check the draft</text>
+<text x="472" y="679" class="quiet s" text-anchor="end">code + Claude</text>
+<text x="64" y="697" class="ink s">Keys in the citable set, no name-drops, claims match cards</text>
+<rect x="48" y="736" width="440" height="56" rx="8" class="code"/>
+<text x="64" y="759" class="ink b">9. Render the outputs</text>
+<text x="472" y="759" class="quiet s" text-anchor="end">code</text>
+<text x="64" y="777" class="ink s">Keys become author-year links; refs.bib comes from ADS export</text>
+<rect x="536" y="336" width="200" height="376" rx="8" class="lib"/>
+<text x="552" y="360" class="ink b">Library (SQLite)</text>
+<text x="552" y="384" class="ink s">papers: ADS records</text>
+<text x="552" y="400" class="ink s">texts: labelled paragraphs</text>
+<text x="552" y="416" class="ink s">cards: per paper and run</text>
+<text x="552" y="448" class="ink s">citable(): bibcodes with</text>
+<text x="552" y="464" class="ink s">text and a verified card</text>
+<text x="552" y="672" class="ink s b">The draft can cite</text>
+<text x="552" y="688" class="ink s b">nothing outside this set</text>
+</svg>

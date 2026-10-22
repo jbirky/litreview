@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# Runs tests/e2e/ui1.py against a running `litreview web` in the Playwright image (as Almanac does).
+#   tests/e2e/run demo http://127.0.0.1:5071/
+#   tests/e2e/run passages http://127.0.0.1:5070/ <run_id>
+set -e
+cd "$(dirname "$0")"
+mkdir -p shots
+exec docker run --rm --network host --ipc host \
+  -u "$(id -u):$(id -g)" -e HOME=/tmp -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+  -v "$PWD":/work -w /work \
+  mcr.microsoft.com/playwright/python:v1.61.0-noble \
+  sh -c 'python3 -m pip install -q --break-system-packages --target /tmp/pw playwright==1.61.0 >/dev/null 2>&1 || exit 1
+    PYTHONPATH=/tmp/pw python3 ui1.py "$@"' -- "$@"
