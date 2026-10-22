@@ -693,3 +693,143 @@ def test_a_pdf_uploaded_for_a_paper_a_review_read_from_its_abstract_is_read_agai
     report = (run.folder / "report.md").read_text()
     assert "search rank, read again from a newer text" in report and f"({P2} again, from a newer text)" in report
     assert request_additions(lib, run.run_id, [P2])[1][0]["reason"] == "already read for this review"
+
+
+# --- running a finished review again --------------------------------------------------------------
+
+
+def counting_ads(kwargs):
+    """The fake ADS, keeping each search query sent to it."""
+    ads, queries = kwargs["ads"], []
+    original = ads.search
+
+    def search(q, **kw):
+        queries.append(q)
+        return original(q, **kw)
+
+    ads.search = search
+    return queries
+
+
+def test_a_rerun_with_full_text_reuses_everything_before_fetch_and_copies_unchanged_cards(setup):
+    lib, client, kwargs, tmp_path = setup
+    run = Run.create(lib, Settings(question="Radius inflation", expand=False, use_batch=False, abstracts_only=True),
+                     runs_dir=tmp_path / "runs", **kwargs)
+    assert run.execute() == "done"
+    calls, searches = len(client.calls), counting_ads(kwargs)
+
+    again = Run.rerun(lib, run.run_id, {"abstracts_only": False, "cost_cap": 4}, runs_dir=tmp_path / "runs", **kwargs)
+    assert again.run_id != run.run_id and again.folder != run.folder
+    assert lib.run(again.run_id)["stage"] == "fetch" and again.settings.cost_cap == 4
+    assert again.execute() == "done"
+
+    # Nothing planned, searched or screened again; the same papers read.
+    new = client.calls[calls:]
+    assert not [c for c in new if c.get("system") in (PLAN_SYSTEM, SCREEN_SYSTEM)]
+    assert not [q for q in searches if not q.startswith("identifier:")]
+    for key in ("plan", "merged", "selected", "not_read"):
+        assert again.get(key) == run.get(key), key
+    assert [dict(r) | {"run_id": ""} for r in lib.screening(again.run_id)] == [
+        dict(r) | {"run_id": ""} for r in lib.screening(run.run_id)]
+
+    # Papers with a full text are read again; those still read from the same abstract keep their cards.
+    cards = {r["bibcode"]: r for r in lib.cards(again.run_id)}
+    full = {b for b, r in cards.items() if r["read_depth"] == "full_text"}
+    assert full == {P1, P4, P5, P6, P8} and {P2, P3} <= set(cards)
+    extracted = sorted(c["messages"][0]["content"][0]["title"] for c in new if c.get("system") == EXTRACT_SYSTEM)
+    assert extracted == sorted(lib.paper(b).title for b in full)
+    for b in (P2, P3):
+        assert cards[b]["card"] == lib.card(run.run_id, b)["card"] and cards[b]["note"].endswith(f"copied from {run.run_id}")
+    assert again.get("rerun_of")["cards"] == [b for b in run.get("selected") if b in (P2, P3)]
+    assert lib.card(run.run_id, P1)["read_depth"] == "abstract_only"  # the original is unchanged
+
+    report = (again.folder / "report.md").read_text()
+    assert f"Run again from {run.run_id} with full text (was abstracts only)." in report
+    assert "reuses that review's plan, ADS searches, screening, citation-graph expansion and choice of papers to read" in report
+    assert "copied 2 cards of papers read from the same text" in report and "screening decision" not in report
+    assert (again.folder / "review.md").exists() and (run.folder / "review.md").exists()
+
+
+def test_a_rerun_with_other_years_keeps_the_queries_and_copies_screening_and_cards(setup):
+    lib, client, kwargs, tmp_path = setup
+    run = Run.create(lib, Settings(question="Radius inflation", expand=False, use_batch=False, max_papers=3),
+                     runs_dir=tmp_path / "runs", **kwargs)
+    assert run.execute() == "done"
+    calls, searches = len(client.calls), counting_ads(kwargs)
+
+    again = Run.rerun(lib, run.run_id, {"since": 2001}, runs_dir=tmp_path / "runs", **kwargs)
+    assert lib.run(again.run_id)["stage"] == "search"
+    assert again.execute() == "done"
+    plan, before = again.get("plan"), run.get("plan")
+    assert plan["queries"] == before["queries"] and plan["interpretation"] == before["interpretation"]
+    assert plan["since"] == 2001 and plan["until"] == before["until"]
+    assert plan["counts"] == {q: 5 if "q-alpha" in q else 4 for q in plan["queries"]}  # from the searches themselves
+    assert all("year:2001-" in q for q in searches if not q.startswith("identifier:"))
+
+    # The fake ADS ignores years, so the same papers are found: their screening and cards are copied.
+    new = client.calls[calls:]
+    assert not [c for c in new if c.get("system") in (PLAN_SYSTEM, SCREEN_SYSTEM, EXTRACT_SYSTEM)]
+    assert again.get("selected") == run.get("selected")
+    rerun = again.get("rerun_of")
+    assert rerun["screening"] == len(lib.screening(run.run_id)) and len(rerun["cards"]) == 3
+    tasks = [c["messages"][0]["content"][1]["text"] for c in new if c.get("system") == BASE_SYSTEM]
+    assert sum(t.startswith("Task: write the review draft") for t in tasks) == 1
+    report = (again.folder / "report.md").read_text()
+    assert "with papers from 2001 (was the planner's first year). It reuses that review's plan." in report
+    assert f"It copied {rerun['screening']} screening decisions and 3 cards" in report
+
+
+def test_a_rerun_with_the_citation_graph_screens_and_reads_only_what_it_adds(setup):
+    lib, client, kwargs, tmp_path = setup
+    run = Run.create(lib, Settings(question="Radius inflation", expand=False, use_batch=False),
+                     runs_dir=tmp_path / "runs", **kwargs)
+    assert run.execute() == "done"
+    calls, searches = len(client.calls), counting_ads(kwargs)
+
+    again = Run.rerun(lib, run.run_id, {"expand": True}, runs_dir=tmp_path / "runs", **kwargs)
+    assert lib.run(again.run_id)["stage"] == "expand"
+    assert again.execute() == "done"
+    assert len([q for q in searches if "bibcode:(" in q]) == 5 and not [q for q in searches if "q-alpha" in q]
+    assert again.get("expansion")["new"] == [P9]
+    new = client.calls[calls:]
+    screened = [c["messages"][0]["content"] for c in new if c.get("system") == SCREEN_SYSTEM]
+    assert len(screened) == 1 and "Tidal heating" in screened[0] and "Inflation first seen" not in screened[0]
+    assert [c["messages"][0]["content"][0]["title"] for c in new if c.get("system") == EXTRACT_SYSTEM] == ["Tidal heating"]
+    assert set(again.get("selected")) == set(run.get("selected")) | {P9}
+
+    # Turning it off again drops what the expansion found.
+    off = Run.rerun(lib, again.run_id, {"expand": False}, runs_dir=tmp_path / "runs", **kwargs)
+    assert not [r for r in lib.hits(off.run_id) if r["via"] != "query"]
+    assert P9 not in {m["bibcode"] for m in off.get("merged")} and P9 not in {r["bibcode"] for r in lib.screening(off.run_id)}
+    assert off.execute() == "done" and P9 not in off.get("selected")
+
+
+def test_only_a_finished_review_can_be_run_again(setup):
+    lib, client, kwargs, tmp_path = setup
+    run = Run.create(lib, Settings(question="Radius inflation", cost_cap=0.0001), runs_dir=tmp_path / "runs", **kwargs)
+    assert run.execute() == "paused"
+    with pytest.raises(KeyError):
+        Run.rerun(lib, "nope", {}, runs_dir=tmp_path / "runs")
+    with pytest.raises(ValueError, match="only a finished review"):
+        Run.rerun(lib, run.run_id, {}, runs_dir=tmp_path / "runs")
+    lib.set_run(run.run_id, stage="done")
+    lib.put(run.run_id, "final_draft", "")
+    with pytest.raises(ValueError, match="can't change question"):
+        Run.rerun(lib, run.run_id, {"question": "Something else"}, runs_dir=tmp_path / "runs")
+    with pytest.raises(ValueError, match="first year is after the last"):
+        Run.rerun(lib, run.run_id, {"since": 2020, "until": 2000}, runs_dir=tmp_path / "runs")
+    assert len(lib.runs()) == 1
+
+
+def test_a_rerun_without_years_uses_the_planners_own():
+    from litreview.pipeline import rerun_plan
+
+    plan = {"interpretation": "x", "since": 1995, "until": 2020, "queries": ["q"], "counts": {"q": 3}, "first_counts": {}}
+    same = Settings(question="x")
+    assert rerun_plan(plan, same, Settings(question="x", since=2001)) == {
+        "interpretation": "x", "since": 2001, "until": 2020, "queries": ["q"], "counts": {}}
+    # A plan from before the planner's years were kept: 1995 was the user's, so the planner's is unknown.
+    assert rerun_plan(plan, Settings(question="x", since=1995), same)["since"] is None
+    planned = {**plan, "planned": {"since": 1990, "until": None}}
+    assert rerun_plan(planned, Settings(question="x", since=1995, until=2020), same) | {"planned": None} == {
+        "interpretation": "x", "since": 1990, "until": None, "queries": ["q"], "counts": {}, "planned": None}

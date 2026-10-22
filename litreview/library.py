@@ -412,6 +412,13 @@ class Library:
         )
         self.db.commit()
 
+    def reruns(self, run_id: str) -> list[str]:
+        """The runs that ran this one again, oldest first."""
+        return [r["run_id"] for r in self.db.execute(
+            """SELECT d.run_id FROM run_data d JOIN runs r ON r.run_id = d.run_id
+               WHERE d.key = 'rerun_of' AND json_extract(d.value, '$.run_id') = ? ORDER BY r.created_at""",
+            (run_id,))]
+
     def set_settings(self, run_id: str, settings: dict) -> None:
         self.db.execute("UPDATE runs SET settings = ?, updated_at = ? WHERE run_id = ?",
                         (json.dumps(settings), time.time(), run_id))

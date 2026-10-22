@@ -1,4 +1,4 @@
-"""Command line: litreview run | resume | add | attach | search | card | recheck | report | share | refs | runs."""
+"""Command line: litreview run | resume | add | rerun | attach | search | card | recheck | report | share | refs | runs."""
 
 from __future__ import annotations
 
@@ -72,6 +72,29 @@ def cmd_add(args, lib: Library) -> int:
     except RunBusy as e:
         print(e, file=sys.stderr)
         return 1
+
+
+def cmd_rerun(args, lib: Library) -> int:
+    """Run a finished review again as a new review with other settings; what they don't change is copied."""
+    given = {"since": args.since, "until": args.until, "refereed_only": args.refereed, "expand": args.expand,
+             "max_papers": args.max_papers, "abstracts_only": args.abstracts_only, "use_batch": args.batch,
+             "cost_cap": args.cost_cap}
+    # A year of 0 is "any": the planner's own.
+    changes = {k: (v or None if k in ("since", "until") else v) for k, v in given.items() if v is not None}
+    try:
+        run = Run.rerun(lib, args.run, changes, poll_interval=args.poll)
+    except KeyError as e:
+        print(e.args[0], file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"run {run.run_id} -> {run.folder}")
+    return 0 if run.execute() in ("done", "paused") else 1
+
+
+def year_or_any(text: str) -> int:
+    return 0 if text == "any" else int(text)
 
 
 def cmd_search(args, lib: Library) -> int:
@@ -356,6 +379,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batch", action="store_true", help="extract through Batches: half price, can take an hour")
     p.add_argument("--poll", type=float, default=30.0)
     p.set_defaults(fn=cmd_add)
+
+    p = sub.add_parser("rerun", help="run a finished review again as a new review with other settings, "
+                                     "copying what they don't change")
+    p.add_argument("run")
+    p.add_argument("--full-text", dest="abstracts_only", action="store_false", default=None,
+                   help="read full texts, where the review read abstracts only")
+    p.add_argument("--abstracts-only", dest="abstracts_only", action="store_true", default=None)
+    p.add_argument("--max-papers", type=int)
+    p.add_argument("--since", type=year_or_any, help="first year, or 'any' for the planner's")
+    p.add_argument("--until", type=year_or_any, help="last year, or 'any' for the planner's")
+    p.add_argument("--refereed", action=argparse.BooleanOptionalAction, help="refereed papers only")
+    p.add_argument("--expand", action=argparse.BooleanOptionalAction, help="citation-graph expansion")
+    p.add_argument("--batch", action=argparse.BooleanOptionalAction, help="extract cards through Batches")
+    p.add_argument("--cost-cap", type=float, help="stop before spending more than this (USD); default the review's")
+    p.add_argument("--poll", type=float, default=30.0)
+    p.set_defaults(fn=cmd_rerun)
 
     p = sub.add_parser("attach", help="store a PDF of a paper or book (from ADS) as its full text")
     p.add_argument("paper", help="the paper's ADS bibcode, arXiv id or DOI, or a link to one of them")

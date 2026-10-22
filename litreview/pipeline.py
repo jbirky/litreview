@@ -5,6 +5,7 @@ that is still processing.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import shutil
@@ -25,7 +26,7 @@ from .library import Library, Paper, StoredText, checksum
 from .llm import LLM, CostCapReached, Refused, Reply
 from .openaccess import OpenAccessClient
 from .papers import RateLimited, read_full_text
-from .render import render_report, render_review, slug
+from .render import render_report, render_review, rerun_text, slug
 from .synthesize import ask, cards_block, draft, mend, parse_mends, revise
 from .verify import (Draft, Issue, check_chronology, check_keys, check_names_and_quotes, claim_check_prompts,
                      fix_chronology, keys_in, mend_targets, parse_draft, parse_labels, remove_sentences,
@@ -38,6 +39,12 @@ EXTRACT_MAX_TOKENS = 16000  # thinking at medium effort plus ~20 tagged lines
 CITED_MIN = 2  # how many included papers must cite a paper before it can be read for its citations
 MAX_ADDED = 30  # papers added to a finished review at once
 BIBCODE = re.compile(r"^\d{4}\S{15}$")
+# The first stage whose results each setting a rerun can change. A rerun starts at the earliest stage
+# among the settings it changes, or at fetch when it changes none of them, so it reads each paper's
+# newest text; the cost cap and Batches change no results.
+RERUN_FROM = {"since": "search", "until": "search", "refereed_only": "search", "expand": "expand",
+              "max_papers": "select", "abstracts_only": "fetch"}
+RERUN_SETTINGS = (*RERUN_FROM, "use_batch", "cost_cap")
 
 
 try:
@@ -150,6 +157,24 @@ def request_additions(lib: Library, run_id: str, bibcodes: list[str]) -> tuple[l
     return wanted, skipped
 
 
+def rerun_start(old: Settings, new: Settings) -> str:
+    """The stage a rerun with these settings starts at (see RERUN_FROM)."""
+    changed = [STAGES.index(stage) for key, stage in RERUN_FROM.items() if getattr(old, key) != getattr(new, key)]
+    return STAGES[min(changed, default=STAGES.index("fetch"))]
+
+
+def rerun_plan(plan: dict, old: Settings, new: Settings) -> dict:
+    """The original's plan with a rerun's years: those given, else the planner's own, as stage_plan
+    chooses them. Its hit counts were for the old filters, so the searches count them again."""
+    planned = plan.get("planned") or {}
+    out = {k: v for k, v in plan.items() if k != "first_counts"} | {"counts": {}}
+    for k in ("since", "until"):
+        # Plans from before "planned" was kept hold the planner's year only where none was given.
+        mine = planned[k] if k in planned else plan[k] if getattr(old, k) is None else None
+        out[k] = getattr(new, k) or mine
+    return out
+
+
 def resolve_folder(stored: str, runs_dir: Path = RUNS_DIR) -> Path:
     """A run's folder. The stored path is absolute on the machine that created the run; the web
     container mounts runs/ elsewhere, so fall back to the same folder name under runs_dir."""
@@ -192,6 +217,130 @@ class Run:
         folder.mkdir(parents=True)
         lib.create_run(run_id, settings.question, settings.to_dict(), str(folder), status=status)
         return cls(lib, run_id, **kwargs)
+
+    @classmethod
+    def rerun(cls, lib: Library, source: str, changes: dict, runs_dir: Path = RUNS_DIR, status: str = "running",
+              **kwargs) -> "Run":
+        """A new review of a finished one's question, with `changes` to its settings (any of
+        RERUN_SETTINGS). It copies what the original found in the stages before the first one the
+        changes affect, and starts there. Later, a screening decision or a card is copied wherever
+        the new run would ask Claude the same thing about the same text."""
+        row = lib.run(source)
+        if row is None:
+            raise KeyError(f"no run named {source}")
+        if row["stage"] != "done" or lib.get(source, "final_draft") is None:
+            raise ValueError("only a finished review can be run again")
+        if unknown := sorted(set(changes) - set(RERUN_SETTINGS)):
+            raise ValueError(f"a rerun can't change {', '.join(unknown)}")
+        old = Settings.from_dict(json.loads(row["settings"]))
+        new = Settings.from_dict({**old.to_dict(), **changes})
+        if new.since and new.until and new.since > new.until:
+            raise ValueError("the first year is after the last")
+        run = cls.create(lib, new, runs_dir=runs_dir, status=status, **kwargs)
+        run._copy_from(source, old)
+        return run
+
+    def _copy_from(self, source: str, old: Settings) -> None:
+        """Copy the original's results from the stages a rerun skips, and start it at the next one."""
+        lib, new = self.lib, self.settings
+        start = rerun_start(old, new)
+        at = STAGES.index(start)
+        plan = lib.get(source, "plan")
+        self.put("plan", rerun_plan(plan, old, new) if start == "search" else plan)
+        copied = ["plan"]
+        if at > STAGES.index("search"):
+            # Starting at expand, only what the planned queries found: expansion is done again.
+            again = start == "expand"
+            for (q, via), hits in itertools.groupby(lib.hits(source), key=lambda r: (r["query"], r["via"])):
+                if not (again and via in OPERATORS):
+                    lib.add_hits(self.run_id, q, via, [r["bibcode"] for r in hits])
+            searched = lib.get(source, "searched", [])
+            self.put("searched", [q for q in searched if q in plan["queries"]] if again else searched)
+            if again:
+                self._merge()
+            else:
+                self.put("merged", lib.get(source, "merged"))
+                self.put("alias", lib.get(source, "alias"))
+            rounds = ("search",) if again else ("search", "expand")
+            for round_ in rounds:
+                lib.add_screening(self.run_id, [(r["bibcode"], r["score"], r["reason"]) for r in lib.screening(source)
+                                                if r["round"] == round_], round_)
+            screened = {r["bibcode"] for r in lib.screening(self.run_id)}
+            self.put("screened_on_ads_abstract",
+                     [b for b in lib.get(source, "screened_on_ads_abstract", []) if b in screened])
+            copied += ["searches", "screening"]
+            if not again:
+                self.put("expansion", lib.get(source, "expansion"))
+                copied.append("expansion")
+        added = []
+        if at > STAGES.index("select"):
+            for key in ("selected", "chosen_for_citations", "not_read"):
+                self.put(key, lib.get(source, key))
+            copied.append("selection")
+            added = [b for a in lib.get(source, "additions", []) or [] for b in a.get("added") or []
+                     if b not in (a.get("reread") or [])]
+        changes = {k: [getattr(old, k), getattr(new, k)] for k in RERUN_FROM if getattr(old, k) != getattr(new, k)}
+        rerun = {"run_id": source, "start": start, "changes": changes, "copied": copied, "added": added,
+                 "screening": 0, "cards": []}
+        self.put("rerun_of", rerun)
+        lib.set_run(self.run_id, stage=start)
+        self.log(f"run again from {source} {rerun_text(rerun)} Starting at {start}.")
+
+    def _source(self) -> tuple[str, Settings] | None:
+        """The review this one reruns, and its settings; None if it isn't a rerun."""
+        rerun = self.get("rerun_of")
+        row = self.lib.run(rerun["run_id"]) if rerun else None
+        return (row["run_id"], Settings.from_dict(json.loads(row["settings"]))) if row else None
+
+    def _note_copied(self, key: str, value) -> None:
+        rerun = self.get("rerun_of")
+        rerun[key] += value
+        self.put("rerun_of", rerun)
+
+    def _reused_screening(self, papers: list[Paper], round_: str) -> set[str]:
+        """In a rerun, copy the original's decision on each of these papers it screened, when it used
+        the same model, effort and interpretation of the question. Returns the bibcodes copied."""
+        found = self._source()
+        if found is None or not papers:
+            return set()
+        source, before = found
+        s = self.settings
+        same = ((before.models["screen"], before.efforts["screen"]) == (s.models["screen"], s.efforts["screen"])
+                and self.lib.get(source, "plan")["interpretation"] == self.get("plan")["interpretation"])
+        earlier = {r["bibcode"]: r for r in self.lib.screening(source)} if same else {}
+        rows = [(p.bibcode, earlier[p.bibcode]["score"], earlier[p.bibcode]["reason"])
+                for p in papers if p.bibcode in earlier]
+        if rows:
+            self.lib.add_screening(self.run_id, rows, round_)
+            self._note_copied("screening", len(rows))
+            self.log(f"  copied {len(rows)} screening decisions from {source}")
+        return {b for b, _, _ in rows}
+
+    def _reused_cards(self, bibcodes: list[str]) -> set[str]:
+        """In a rerun, copy the original's card of each of these papers that it extracted with the same
+        model and effort from byte for byte the text this run reads. The question is the same, so
+        Claude would be asked the same thing. Refused cards are asked again. Returns the bibcodes copied."""
+        found = self._source()
+        if found is None:
+            return set()
+        source, before = found
+        s = self.settings
+        if (before.models["extract"], before.efforts["extract"]) != (s.models["extract"], s.efforts["extract"]):
+            return set()
+        copied = []
+        for b in bibcodes:
+            row, text = self.lib.card(source, b), self._stored(b)
+            if row is None or row["status"] == "refused" or (
+                    (row["text_source"], row["text_version"], row["text_checksum"]) != (text.source, text.version, text.checksum)):
+                continue
+            note = "; ".join(n for n in (row["note"], f"copied from {source}") if n)
+            self.lib.put_card(self.run_id, b, json.loads(row["card"]), verified=bool(row["verified"]),
+                              status=row["status"], read_depth=row["read_depth"], text=text, note=note)
+            copied.append(b)
+        if copied:
+            self._note_copied("cards", copied)
+            self.log(f"  copied {len(copied)} cards from {source}, of papers read from the same text")
+        return set(copied)
 
     @property
     def ads(self) -> ADSClient:
@@ -280,6 +429,7 @@ class Run:
         if not queries:
             raise RuntimeError("none of the planned queries returned ADS results")
         self.put("plan", {"interpretation": p.interpretation, "since": since, "until": until,
+                          "planned": {"since": p.since, "until": p.until},
                           "queries": queries, "counts": counts, "first_counts": first_counts})
         for q in queries:
             self.log(f"  {counts[q]:>6}  {q}")
@@ -292,7 +442,10 @@ class Run:
         if q in searched:
             return 0
         plan = self.get("plan")
-        _, docs = self.ads.search(self._query(q, plan["since"], plan["until"]), rows=200)
+        n, docs = self.ads.search(self._query(q, plan["since"], plan["until"]), rows=200)
+        if via == "query" and q not in plan["counts"]:  # a rerun with other years or filters
+            plan["counts"][q] = n
+            self.put("plan", plan)
         bibcodes = []
         for doc in docs:
             paper = paper_from_record(doc)
@@ -360,6 +513,8 @@ class Run:
         ads_only = set(self.get("screened_on_ads_abstract", [])) | {
             p.bibcode for p in todo if p.ads_abstract and not p.arxiv_abstract}
         self.put("screened_on_ads_abstract", sorted(ads_only))
+        copied = self._reused_screening(todo, round_)
+        todo = [p for p in todo if p.bibcode not in copied]
         for start in range(0, len(todo), planning.SCREEN_BATCH):
             chunk = todo[start : start + planning.SCREEN_BATCH]
             result = planning.screen(self.llm, s.models["screen"], s.efforts["screen"], s.question,
@@ -601,6 +756,8 @@ class Run:
         texts = self.get("texts", {})
         done = {r["bibcode"] for r in self.lib.cards(self.run_id)}
         todo = [b for b in self.get("selected") if b in texts and b not in done]
+        copied = self._reused_cards(todo)
+        todo = [b for b in todo if b not in copied]
         if not todo:
             return
         if not s.use_batch or len(todo) == 1:
@@ -902,7 +1059,9 @@ class Run:
         texts = self.get("texts", {})
         selected = self.get("selected", [])
         additions = self.get("additions", []) or []
+        rerun = self.get("rerun_of")
         added = {b for a in additions for b in a.get("added") or [] if b not in (a.get("reread") or [])}
+        added |= set(rerun["added"]) if rerun else set()  # added to the review this one reruns
         reread = {b for a in additions for b in a.get("reread") or []}
         for_citations = self.get("chosen_for_citations", {}) or {}
         read_rows = []
@@ -927,7 +1086,7 @@ class Run:
         fallbacks = [[f["stage"], f["model"], f["stop_reason"], f["fallback"] or "", f["request_id"] or ""]
                      for f in self.lib.fallbacks(self.run_id)]
         return {
-            "run_id": self.run_id, "question": self.settings.question, "plan": self.get("plan"),
+            "run_id": self.run_id, "question": self.settings.question, "plan": self.get("plan"), "rerun_of": rerun,
             "expansion": self.get("expansion"),
             "counts": {"found": len(self.get("merged", [])), "screened": len(screened),
                        "included": sum(1 for r in screened if r["include"]), "read": stats["read"],

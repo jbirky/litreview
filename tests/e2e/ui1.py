@@ -12,6 +12,7 @@
     tests/e2e/run add <url>         # add a paper to the demo's finished review (needs serve_demo.py)
     tests/e2e/run upload <url>      # upload a PDF for a paper read from its abstract, and read it again
                                     # in the demo's finished review (needs a fresh serve_demo.py)
+    tests/e2e/run rerun <url>       # run the demo's finished review again from abstracts only (needs serve_demo.py)
 
 Screenshots go to tests/e2e/shots/.
 """
@@ -407,6 +408,44 @@ def upload(page, url):
     print("upload: a PDF uploaded for a paper read from its abstract was read again and the review written again")
 
 
+def rerun(page, url):
+    page.goto(url)
+    page.locator(".run", has_text="What drives radius inflation").first.click()
+    expect(page.locator(".prose h2").first).to_be_visible()
+    run_url = page.url.split("?")[0]
+    page.get_by_role("link", name="Run again…").click()
+
+    # The form holds the review's question, which can't change, and its settings.
+    expect(page.get_by_role("heading", name="Run this review again")).to_be_visible()
+    question = page.locator("textarea")
+    expect(question).to_have_value("What drives radius inflation in hot Jupiters?")
+    expect(question).to_have_attribute("readonly", "")
+    expect(page.get_by_label("Papers to read")).to_have_value("40")
+    reuse = page.locator(".reuse")
+    expect(reuse).to_contain_text("Nothing changed")
+    page.get_by_label("Papers to read").fill("30")
+    expect(reuse).to_contain_text("Starts at select")
+    page.get_by_label("Papers to read").fill("40")
+    abstracts = page.get_by_role("checkbox", name=re.compile("Abstracts only"))
+    abstracts.check()
+    expect(reuse).to_contain_text("Starts at fetch, copying its plan, searches, screening, citation-graph expansion and choice of papers")
+    page.screenshot(path=SHOTS / "rerun-form.png", full_page=True)
+    page.get_by_role("button", name="Run it again").click()
+
+    # A new review, run in the background, that says what it reused.
+    expect(page.locator(".controls")).to_be_visible()
+    assert page.url.split("?")[0] != run_url
+    expect(page.locator(".controls")).to_have_count(0, timeout=90_000)
+    header = page.locator(".rewritten", has_text="Run again from")
+    expect(header).to_contain_text("with abstracts only (was full text). It reuses that review's plan, ADS searches")
+    expect(header).to_contain_text("cards of papers read from the same text")
+    expect(page.locator(".prose h2").first).to_be_visible()
+    page.screenshot(path=SHOTS / "rerun.png")
+    header.get_by_role("link").click()
+    expect(page.locator(".rewritten", has_text="Run again on")).to_contain_text("with abstracts only (was full text): see that review")
+    print("rerun: the demo review was run again from abstracts only, copying everything before fetch")
+
+
 if __name__ == "__main__":
     mode, url = sys.argv[1], sys.argv[2].rstrip("/") + "/"
     SHOTS.mkdir(exist_ok=True)
@@ -430,6 +469,8 @@ if __name__ == "__main__":
                 add(page, url)
             elif mode == "upload":
                 upload(page, url)
+            elif mode == "rerun":
+                rerun(page, url)
             else:
                 passages(page, url, sys.argv[3])
         finally:

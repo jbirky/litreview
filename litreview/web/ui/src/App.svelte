@@ -40,7 +40,9 @@
 
 <main>
   {#if page === "new"}
-    <NewReview />
+    {#key route.query.from}
+      <NewReview from={route.query.from || null} />
+    {/key}
   {:else if page === "review" && route.parts[1]}
     <Review runId={route.parts[1]} query={route.query} />
   {:else if page === "paper" && route.parts[1]}

@@ -536,3 +536,59 @@ def test_cli_attach_finds_the_paper_by_any_identifier_and_stores_the_pdf(setup, 
     assert "can't read" in capsys.readouterr().err
     assert cli.main(["--db", db, "attach", P3, str(pdf), "--pages", "two", "--json"]) == 1
     assert "pages should look like 120-180" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_a_finished_review_can_be_run_again_from_the_api(web, tmp_path):
+    api, lib, run = web
+    detail = api.get(f"/api/runs/{run.run_id}").json()
+    assert detail["can_rerun"] and detail["reruns"] == [] and detail["rerun_of"] is None
+    assert detail["rerun_from"]["abstracts_only"] == "fetch" and detail["rerun_from"]["since"] == "search"
+    url = f"/api/runs/{run.run_id}/rerun"
+    assert api.post(url, json={"since": 2020, "until": 2000, "cost_cap": 3}).status_code == 422
+    assert api.post(url, json={"max_papers": 0, "cost_cap": 3}).status_code == 422
+    assert api.post("/api/runs/nope/rerun", json={"cost_cap": 3}).status_code == 404
+
+    made = api.post(url, json={"abstracts_only": True, "expand": None, "since": None, "cost_cap": 3})
+    assert made.status_code == 201
+    again = made.json()
+    assert again["status"] == "queued" and again["stage"] == "fetch" and again["run_id"] != run.run_id
+    settings = json.loads(lib.run(again["run_id"])["settings"])
+    assert settings["abstracts_only"] and settings["cost_cap"] == 3 and settings["expand"] is False
+    assert again["rerun_of"]["run_id"] == run.run_id and again["rerun_of"]["start"] == "fetch"
+    assert again["rerun_of"]["text"].startswith("with abstracts only (was full text). It reuses that review's plan,")
+    assert [e["line"] for e in api.get(f"/api/runs/{again['run_id']}/events").json()][-1] == "queued from the web UI"
+    listed = {r["run_id"]: r["rerun"] for r in api.get("/api/runs").json()}
+    assert listed == {run.run_id: None, again["run_id"]: "with abstracts only (was full text)"}
+    reruns = api.get(f"/api/runs/{run.run_id}").json()["reruns"]
+    assert [(r["run_id"], r["status"], r["changes"]) for r in reruns] == [
+        (again["run_id"], "queued", "with abstracts only (was full text)")]
+
+    # Only a finished review, and only by a server that runs reviews.
+    assert api.post(f"/api/runs/{again['run_id']}/rerun", json={"cost_cap": 3}).status_code == 409
+    read_only = TestClient(create_app(tmp_path / "library.sqlite", tmp_path / "runs", static_dir=None, run_jobs=False))
+    assert read_only.post(url, json={"cost_cap": 3}).status_code == 503
+    assert not read_only.get(f"/api/runs/{run.run_id}").json()["can_rerun"]
+
+
+def test_cli_rerun_passes_on_only_the_settings_given(setup, monkeypatch, capsys):
+    from litreview import cli
+
+    lib, _, kwargs, tmp_path = setup
+    run = Run.create(lib, Settings(question="Radius inflation", since=2000, expand=False, use_batch=False,
+                                   abstracts_only=True), runs_dir=tmp_path / "runs", **kwargs)
+    assert run.execute() == "done"
+    lib.close()
+    executed = []
+    monkeypatch.setattr(cli.Run, "execute", lambda self: executed.append(self.run_id) or "done")
+    monkeypatch.setattr(cli.Run.rerun.__func__, "__defaults__", (tmp_path / "runs", "running"))
+    db = str(tmp_path / "library.sqlite")
+    assert cli.main(["--db", db, "rerun", run.run_id, "--full-text", "--since", "any", "--max-papers", "5", "--no-batch"]) == 0
+    lib = Library(db)
+    again = executed[0]
+    assert f"\nrun {again} -> {tmp_path / 'runs' / again}\n" in capsys.readouterr().out
+    settings = json.loads(lib.run(again)["settings"])
+    assert (settings["abstracts_only"], settings["since"], settings["max_papers"], settings["use_batch"]) == (False, None, 5, False)
+    assert settings["expand"] is False and settings["cost_cap"] == 10.0  # kept from the review
+    assert lib.get(again, "rerun_of")["changes"] == {"since": [2000, None], "max_papers": [40, 5], "abstracts_only": [True, False]}
+    assert cli.main(["--db", db, "rerun", "nope"]) == 1 and "no run named nope" in capsys.readouterr().err
+    assert cli.main(["--db", db, "rerun", run.run_id, "--since", "2020", "--until", "2000"]) == 1

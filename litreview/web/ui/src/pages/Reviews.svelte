@@ -39,6 +39,7 @@
           <span>{day(r.created_at)}</span>
           <span>{r.cards} read · {r.verified} verified{r.has_review ? ` · ${r.cited} cited` : ""}</span>
           <span>{money(r.cost)}</span>
+          {#if r.rerun}<span>run again {r.rerun}</span>{/if}
         </div>
       </a>
     {/each}

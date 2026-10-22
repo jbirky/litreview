@@ -2,6 +2,55 @@
 
 Turns a research question into a chronological literature review built only from papers and books it has fetched from NASA ADS and read. Claude chooses the searches, reads the papers and writes the prose. Code holds the set of citable papers, checks every citation and sentence against it, and builds the bibliography from ADS records.
 
+## Web UI
+
+<table>
+  <tr>
+  <td><img src="docs/screenshots/new-review.png" alt="The new-review form: question, years, papers to read, options and cost cap, with a cost estimate"><br><sub>Starting a review, with a cost estimate</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/passage.png" alt="A card item's passage opened at its paragraph in the stored text, beside the review"><br><sub>Generated summary, wehere each citation card opens the paragraph it was taken from</sub></td>
+    <td width="50%"><img src="docs/screenshots/graph.png" alt="The citation graph, one row per paper read by date, with one paper's links brought forward"><br><sub>The citation graph: who cites whom among the papers read</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/papers.png" alt="The review's papers table, with each paper's screening score and reason, the text read and the card's status"><br><sub>Every paper screened, with its score and reason</sub></td>
+    <td><img src="docs/screenshots/library.png" alt="The library: filters, a histogram of papers by year, and a table of the papers read in full"><br><sub>The library, here filtered to the papers read in full</sub></td>
+  </tr>
+</table>
+
+To run it in Docker, which needs neither Python nor Node.js:
+
+```bash
+git clone https://github.com/jbirky/litreview.git
+cd litreview
+cp .env.example .env          # then fill in ADS_API_TOKEN and ANTHROPIC_API_KEY (see Setup)
+mkdir -p data runs            # before the first run, so the folders are yours and not root's
+docker build -t litreview .
+docker run -d --name litreview-web --restart unless-stopped \
+  --user "$(id -u):$(id -g)" --env-file .env --stop-timeout 30 \
+  -p 127.0.0.1:5070:5070 -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
+  litreview
+```
+
+Then open http://127.0.0.1:5070.
+
+- `--user` runs it as you, so SQLite's side files stay writable for the CLI on the host
+- `--env-file .env` gives it the same keys as the CLI
+- `--stop-timeout 30` gives a running review 30 seconds to pause when the container stops
+- `-p 127.0.0.1:5070:5070` serves it to this machine only
+After updating the code, `docker stop litreview-web && docker rm litreview-web`, then build and run again.
+
+Or, without Docker, after [Setup](#setup) and with Node.js 22 or newer:
+
+```bash
+cd litreview/web/ui && npm install && npm run build && cd -   # once, and after UI changes (also builds the shareable page)
+litreview web                                                 # http://127.0.0.1:5070, keys from .env
+```
+
+Set `LITREVIEW_MONTHLY_CREDITS=100` in `.env`, or whatever your plan includes, to show this month's spend against it in the top bar.
+
+Anyone who can open the page can start reviews on your credits, so never put it on the open internet. It listens only on 127.0.0.1 unless you change that. To reach it from your other devices, use a private network, such as a Tailscale tailnet (`tailscale serve`, never `funnel`). Changes, and ADS lookups, are accepted only as JSON from the page's own origin, so another website can't start a review, or spend your ADS requests, through your browser. The one exception is an uploaded PDF, sent as `application/pdf`, which browsers likewise won't send from another site without the server's consent. Uploads are capped at 300 MB and read by a separate `litreview attach` process. `litreview web --read-only` serves browsing alone.
+
 ## How it works
 
 A run is nine steps in a fixed order. Claude chooses searches, judges relevance, reads and writes. Code does the storing, checking and rendering.
@@ -34,13 +83,14 @@ Install it editable (`-e`) from the clone, as above. litreview keeps its library
   mkdir -p data/tessdata && curl -L -o data/tessdata/eng.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata
   ```
 
-## Use
+## Command Line Use
 
 ```bash
 litreview search 'abs:"hot Jupiter" AND abs:"radius inflation"'   # one ADS query, no Claude
 litreview run "What drives radius inflation in hot Jupiters?" --since 2000
 litreview resume <run>         # after Ctrl-C, a low ADS quota, the cost cap, or a pending batch
 litreview add <run> <bibcode>... --cost-cap 10   # read more papers for a finished review and write it again
+litreview rerun <run> --full-text  # a finished review again as a new one, copying what the change doesn't affect
 litreview attach <bibcode> book.pdf --pages 120-180  # a PDF you have of a paper or book becomes its full text
 litreview card <run> <bibcode> # one evidence card beside the passages it cites
 litreview summary <bibcode>   # the paper's question-independent summary, beside its passages
@@ -55,6 +105,15 @@ litreview runs
 Of the papers screening includes, `--max-papers` are read, chosen in turn from two rankings: the search ranking, and how many of the other included papers cite each one (from the reference lists ADS searches return, at no extra request). Citations bring in the papers a field builds on that the searches ranked low; the search ranking keeps recent papers, which have had little time to be cited. report.md says which ranking chose each paper.
 
 `add` reads the papers it is given (any ADS bibcode, such as a gap in the citation graph or a paper screening left out) alongside the others, and writes the review again from every card. Nothing is searched or screened again, and only the new papers are read, so it costs their extraction plus drafting and checks: about $2–4 for a 20-paper review. A copy of the previous outputs is kept in `runs/<run>/v1/` (then `v2/`, ...). Extraction runs interactively unless you pass `--batch`.
+
+`rerun` runs a finished review again as a new review of the same question, with the settings you give: `--full-text` or `--abstracts-only`, `--max-papers`, `--since` and `--until` (`any` for the planner's years), `--refereed` or `--no-refereed`, `--expand` or `--no-expand`, `--batch` or `--no-batch`, and `--cost-cap`. Settings you leave out keep the review's. The new review copies whatever the original found before the first step your changes affect:
+
+- Switching between abstracts and full text, or changing nothing, keeps the plan, searches, screening and choice of papers.
+- Another number of papers to read chooses them again from the same screening.
+- Turning the citation graph on or off follows it again.
+- Other years, or the refereed filter, search again with the same queries, and papers screened before keep their scores.
+
+A paper read from exactly the same text as before keeps its card. Drafting and checking always run again, and they are about two thirds of a review's cost. So a rerun mostly saves the cards of papers whose text hasn't changed, and it reads the same papers as the original, so the two can be compared. The original stays as it is. **Run again…** on a finished review in the web UI does the same.
 
 Searches find refereed papers, arXiv preprints, and books and book chapters (ADS has about 75,000 books and 400,000 chapters, few of them marked refereed). Screening sees which records are books; many have only a publisher's description, or no abstract at all.
 
@@ -106,59 +165,17 @@ Each host gets at most one request every 2 s. Only legal copies are fetched. The
 
 Pages that are only a scanned image are read by OCR (Tesseract, built into PyMuPDF), once `data/tessdata/eng.traineddata` is in place (see [Setup](#setup)). `TESSDATA_PREFIX` points elsewhere if you prefer. OCR takes about 7 s a page, with up to 8 pages read at once, each in its own process. An 11-page two-column 1994 PASP scan took 18 s. On a two-column page the columns are found from the gutter between them and read left, then right. OCR misreads some characters, and equations come out garbled. Claude is told when a text was read by OCR, and the paper page marks it "OCR". Uploaded scans are read by OCR the same way. Without the OCR data, a scan with no text layer can't be read.
 
-## Web UI
+## How a run spends time and money
 
-A browser over the same library that can also run reviews:
-- **Reviews**, each with:
-  - the review, where every citation opens that paper's card beside it, and every card item links to the stored paragraph it came from
-  - a timeline of the cited papers
-  - a citation graph of the papers read: one row per paper by date, with a bracket from each paper to every other one it cites. Hover a paper to bring its links forward; click it for its card. Below it, the papers that several of them cite but the review didn't read, each with what the review's searches made of it (not found, screened out and why, or past the number of papers to read). Tick any of them to add them to the review. The links come from ADS reference lists, which every search now stores at no extra request. Papers stored before that show **Get citation links from ADS**, about one ADS request per 40 papers and no Claude cost.
-  - every screened paper, with its score and reason, and why each paper read was chosen. On a finished review, an **Add papers to this review** box at the top takes any paper: tick ones in the table that weren't read (**Included, not read** lists those screening kept) or that it read and now have a newer text, such as an uploaded PDF, or find others in ADS by bibcode, arXiv ID, DOI, a link to any of them, "Kelly et al. 2009", or an ADS query. Each result says whether the review read it, screened it (with the score and reason) or never saw it, and how many of the papers read cite it. A lookup is one ADS request and no Claude cost.
-  - **Add papers** (on a finished review): reads the ticked papers and writes the review again, as `litreview add` does, with a cost estimate and a new cap. The current version stays on the page until the new one is written.
-  - the run report
-  - **Download shareable page**: the review as one HTML file to send people (the same file as `litreview share`). It opens in any browser with no server, and has the review, the timeline, the citation graph, the papers table (every paper screened, with its score and reason), each paper read's card with the paragraphs the card cites, and refs.bib. It leaves out costs, the run report and the rest of the stored texts. **Preview** opens it in a new tab.
-- **New review**: a form for the question, years, number of papers, citation-graph expansion, Batches and the cost cap, with a rough cost estimate.
-- **Run controls** on any review that isn't finished:
-  - live progress, with the stage and the same log lines the CLI prints
-  - **Pause** (sends the worker Ctrl-C, so the review pauses cleanly)
-  - **Continue**, with a new cost cap suggested when the old one stopped it
-- **Paper pages**, with the paper's summary, its cards from every review, and the exact text the model read. **Upload a PDF** there stores a PDF of the paper or book as its full text, all of it or the pages you give (see [Uploading PDFs](#uploading-pdfs)).
-- **The library**: every paper found, with filters, a year histogram, and search inside the papers that were read. Two buttons appear on any paper that needs them:
-  - **Get text** fetches the full text from arXiv (LaTeX, then HTML, then PDF), or else from a scan ADS hosts or an open-access copy (see [Full text beyond arXiv](#full-text-beyond-arxiv)). It has no Claude cost.
-  - **Summarize** writes the question-independent summary with Sonnet, about $0.07, fetching the text first if needed. Every line of the summary cites its passages and is checked like a card.
+About 25 ADS requests per review (limit 5,000/day). arXiv: one request every 3 s on export.arxiv.org (API and LaTeX source; arxiv.org's robots.txt disallows `/src`), one every 15 s on arxiv.org (HTML and PDF fallbacks). Papers arXiv can't supply: one request every 2 s to each of ADS's link gateway, Unpaywall and the hosts of the copies it finds. Claude: Opus 5.5 plans, drafts and checks. Haiku 5.5 screens abstracts for about $0.03 per 300 papers; Opus cost $0.94 for the same 300. If Haiku refuses a batch of abstracts, the same request is retried once on Sonnet 5.5, because Haiku has no server-side fallback. Sonnet 5.5 extracts cards through the Batches API (half price, usually done within an hour). The same request writes a summary of the paper that doesn't depend on the question (aim, methods, results, limitations, each citing its passages). It is written once per full text and stored apart from the run's cards, so a later review that reads the same text doesn't pay for it again. Estimated ~$3 for a 40-paper review. The run pauses before any call whose worst case (its whole `max_tokens` used) would pass `--cost-cap`, so the real spend usually stays well under the cap.
 
-  The paper page has the same buttons. These tasks run in their own lane (`litreview tasks`), so they don't wait behind a review.
+Batches can't carry refusal fallbacks, so a card request refused inside a batch is retried once interactively, where `fallbacks: "default"` applies. A paper refused outright stays uncitable and is listed in report.md.
 
-LaTeX math in stored texts, card quotes, abstracts and titles is rendered with KaTeX, in the UI and on shareable pages. A formula KaTeX can't parse, such as one using a macro a paper defines itself, is shown as its LaTeX source.
-
-Reviews started or continued in the browser are queued. A background worker runs them one at a time, each as its own `litreview resume` process. It also waits for any review the CLI is running. Progress is kept in the library, so the page shows the same thing whether a review was started from the browser or from the CLI. Closing the page doesn't stop a review. Restarting the server pauses one, and you can continue it.
-
-Anyone who can open the page can start reviews on your credits, so never put it on the open internet. It listens only on 127.0.0.1 unless you change that. To reach it from your other devices, use a private network, such as a Tailscale tailnet (`tailscale serve`, never `funnel`). Changes, and ADS lookups, are accepted only as JSON from the page's own origin, so another website can't start a review, or spend your ADS requests, through your browser. The one exception is an uploaded PDF, sent as `application/pdf`, which browsers likewise won't send from another site without the server's consent. Uploads are capped at 300 MB and read by a separate `litreview attach` process. `litreview web --read-only` serves browsing alone.
+## Tests
 
 ```bash
-cd litreview/web/ui && npm install && npm run build && cd -   # once, and after UI changes (also builds the shareable page)
-litreview web                                                 # http://127.0.0.1:5070, keys from .env
+python -m pytest -q        # offline: fake ADS, arXiv and Claude, plus the real SDK against a mock transport
 ```
-
-Or run it in Docker, which builds the UI itself, so it needs no Node.js. From the clone:
-
-```bash
-mkdir -p data runs            # before the first run, so the folders are yours and not root's
-docker build -t litreview .
-docker run -d --name litreview-web --restart unless-stopped \
-  --user "$(id -u):$(id -g)" --env-file .env --stop-timeout 30 \
-  -p 127.0.0.1:5070:5070 -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  litreview
-```
-
-- `--user` runs it as you, so SQLite's side files stay writable for the CLI on the host
-- `--env-file .env` gives it the same keys as the CLI
-- `--stop-timeout 30` gives a running review 30 seconds to pause when the container stops
-- `-p 127.0.0.1:5070:5070` serves it to this machine only. To reach it from other devices on your tailnet: `sudo tailscale serve --bg --https=5070 http://127.0.0.1:5070`
-
-After updating the code, `docker stop litreview-web && docker rm litreview-web`, then build and run again.
-
-Port 5060 would clash with SIP, and browsers refuse it, so the UI uses 5070. Set `LITREVIEW_MONTHLY_CREDITS=100` in `.env`, or whatever your plan includes, to show this month's spend against it. Next to it, the top bar shows how many of today's ADS search requests are used, as of the last ADS request any litreview process made (saved in `data/ads-quota.json`). `npm run dev` in `litreview/web/ui` serves a live-reloading UI on :5173 against `litreview web` on :5070.
 
 Browser tests run in Microsoft's Playwright Docker image (`tests/e2e/run` starts it), against a demo library whose reviews run on the test fakes:
 
@@ -172,19 +189,10 @@ tests/e2e/run share http://127.0.0.1:5070/ <run>      # the shareable page, down
 tests/e2e/run graph http://127.0.0.1:5071/ <run>      # the citation graph; fetches any missing links first (needs serve_demo.py)
 tests/e2e/run add http://127.0.0.1:5071/              # add a paper found in ADS and a screened-out one to the demo review (needs a fresh serve_demo.py)
 tests/e2e/run upload http://127.0.0.1:5071/           # upload a PDF for a paper read from its abstract, then read it again in the demo review (needs a fresh serve_demo.py)
+tests/e2e/run rerun http://127.0.0.1:5071/            # run the demo review again from abstracts only, as a new review (needs serve_demo.py)
 ```
 
-## How a run spends time and money
-
-About 25 ADS requests per review (limit 5,000/day). arXiv: one request every 3 s on export.arxiv.org (API and LaTeX source; arxiv.org's robots.txt disallows `/src`), one every 15 s on arxiv.org (HTML and PDF fallbacks). Papers arXiv can't supply: one request every 2 s to each of ADS's link gateway, Unpaywall and the hosts of the copies it finds. Claude: Opus 5.5 plans, drafts and checks. Haiku 5.5 screens abstracts for about $0.03 per 300 papers; Opus cost $0.94 for the same 300. If Haiku refuses a batch of abstracts, the same request is retried once on Sonnet 5.5, because Haiku has no server-side fallback. Sonnet 5.5 extracts cards through the Batches API (half price, usually done within an hour). The same request writes a summary of the paper that doesn't depend on the question (aim, methods, results, limitations, each citing its passages). It is written once per full text and stored apart from the run's cards, so a later review that reads the same text doesn't pay for it again. Estimated ~$3 for a 40-paper review. The run pauses before any call whose worst case (its whole `max_tokens` used) would pass `--cost-cap`, so the real spend usually stays well under the cap.
-
-Batches can't carry refusal fallbacks, so a card request refused inside a batch is retried once interactively, where `fallbacks: "default"` applies. A paper refused outright stays uncitable and is listed in report.md.
-
-## Tests
-
-```bash
-python -m pytest -q        # offline: fake ADS, arXiv and Claude, plus the real SDK against a mock transport
-```
+`npm run dev` in `litreview/web/ui` serves a live-reloading UI on :5173 against `litreview web` on :5070, for working on the UI.
 
 Evaluation against 5 published reviews (costs real money, run by hand):
 

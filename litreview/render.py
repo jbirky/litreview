@@ -166,9 +166,53 @@ def _table(headers: list[str], rows: list[list]) -> str:
     return "\n".join(out)
 
 
+def setting_text(key: str, value) -> str:
+    """One setting a rerun can change, in words."""
+    return {
+        "since": f"papers from {value}" if value else "the planner's first year",
+        "until": f"papers up to {value}" if value else "the planner's last year",
+        "refereed_only": "refereed papers only" if value else "preprints and books as well as refereed papers",
+        "expand": "citation-graph expansion" if value else "no citation-graph expansion",
+        "max_papers": f"{value} papers to read",
+        "abstracts_only": "abstracts only" if value else "full text",
+    }[key]
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+COPIED = {"plan": "plan", "searches": "ADS searches", "screening": "screening",
+          "expansion": "citation-graph expansion", "selection": "choice of papers to read"}
+
+
+def rerun_changes(rerun: dict) -> str:
+    """What a rerun changed, to follow "Run again "."""
+    changes = rerun["changes"]
+    if not changes:
+        return "with the same settings, reading each paper's newest text"
+    return "with " + "; ".join(f"{setting_text(k, new)} (was {setting_text(k, old)})" for k, (old, new) in changes.items())
+
+
+def rerun_text(rerun: dict) -> str:
+    """What a rerun changed and what it took from the review it reran, to follow "Run again from <run> "."""
+    out = [rerun_changes(rerun) + "."]
+    out.append(f"It reuses that review's {_and([COPIED[c] for c in rerun['copied']])}.")
+    copied = []
+    if n := rerun["screening"]:
+        copied.append(f"{n} screening decision{'s' if n != 1 else ''}")
+    if n := len(rerun["cards"]):
+        copied.append(f"{n} card{'s' if n != 1 else ''} of papers read from the same text")
+    if copied:
+        out.append(f"It copied {_and(copied)}, whose cost is counted in that review.")
+    return " ".join(out)
+
+
 def render_report(ctx: dict) -> str:
     """report.md: what was searched, screened, read and cited, and every check failure."""
     out = [f"# Run report: {ctx['run_id']}", f"litreview {VERSION} · question: {ctx['question']}"]
+    if ctx.get("rerun_of"):
+        out.append(f"Run again from {ctx['rerun_of']['run_id']} {rerun_text(ctx['rerun_of'])}")
 
     plan = ctx["plan"]
     out.append("## Queries")

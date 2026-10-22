@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from ..ads import QUOTA_FILE, ADSClient, ADSError, lookup_queries, quota_used
 from ..config import DB_PATH, RUNS_DIR, Settings
 from ..library import Library
-from ..pipeline import MAX_ADDED, Run, request_additions, run_is_active
+from ..pipeline import MAX_ADDED, RERUN_SETTINGS, Run, request_additions, run_is_active
 from . import share, views
 from .jobs import JobRunner
 from .search import SearchIndex
@@ -72,6 +72,19 @@ class NewRun(BaseModel):
     abstracts_only: bool = False
     use_batch: bool = True
     cost_cap: float = Field(5.0, gt=0, le=100)
+
+
+class Rerun(BaseModel):
+    """Settings for running a finished review again; those left out keep the review's. A year of null is
+    the planner's own."""
+    since: int | None = Field(None, ge=1900, le=2100)
+    until: int | None = Field(None, ge=1900, le=2100)
+    max_papers: int | None = Field(None, ge=1, le=100)
+    refereed_only: bool | None = None
+    expand: bool | None = None
+    abstracts_only: bool | None = None
+    use_batch: bool | None = None
+    cost_cap: float = Field(gt=0, le=100)
 
 
 class Resume(BaseModel):
@@ -150,7 +163,7 @@ def create_app(db_path: Path | str | None = None, runs_dir: Path | str | None = 
         detail = found(views.run_detail(lib, run_id), "run")
         detail["active"] = detail["status"] == "running" and run_is_active(lib, run_id)
         detail["here"] = bool(runner) and runner.state()["current"] == run_id
-        detail["can_add"] = bool(runner) and detail["status"] == "done" and detail["has_review"]
+        detail["can_add"] = detail["can_rerun"] = bool(runner) and detail["status"] == "done" and detail["has_review"]
         detail["cap_pause"] = views.cap_pause(lib, run_id, lib.run(run_id)["error"]) if detail["status"] == "paused" else None
         if detail["status"] == "queued":
             queued = [r["run_id"] for r in lib.db.execute(
@@ -174,6 +187,22 @@ def create_app(db_path: Path | str | None = None, runs_dir: Path | str | None = 
             raise HTTPException(422, "the first year is after the last")
         settings = Settings(**body.model_dump())
         run = Run.create(lib, settings, runs_dir=runs_dir, status="queued")
+        run.log("queued from the web UI")
+        return views.run_detail(lib, run.run_id)
+
+    @app.post("/api/runs/{run_id}/rerun", status_code=201)
+    def rerun(run_id: str, body: Rerun, lib: Library = Depends(library)):
+        """Queue a finished review to run again as a new review (Run.rerun)."""
+        need_runner()
+        row = found(lib.run(run_id), "run")
+        if row["status"] != "done":
+            raise HTTPException(409, f"the run is {row['status']}; it can be run again once it's finished")
+        given = body.model_dump(exclude_unset=True)
+        changes = {k: v for k, v in given.items() if k in RERUN_SETTINGS and (v is not None or k in ("since", "until"))}
+        try:
+            run = Run.rerun(lib, run_id, changes, runs_dir=runs_dir, status="queued")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         run.log("queued from the web UI")
         return views.run_detail(lib, run.run_id)
 

@@ -44,6 +44,30 @@ export function estimateCost({ max_papers, use_batch, abstracts_only }) {
   return [fixed + 0.5, fixed + 1.5];
 }
 
+// The settings a rerun of `source` changes, comparing the form's values with the review's own.
+export function rerunChanges(form, source) {
+  const value = (v) => (v === "" || v === null || v === undefined ? null : typeof v === "string" ? Number(v) : v);
+  return Object.keys(source.rerun_from).filter((key) => value(form[key]) !== value(source.settings[key]));
+}
+
+// The stage a rerun starts at: the earliest that a changed setting affects (run.rerun_from, which is
+// pipeline.RERUN_FROM), or fetch, which reads each paper's newest text.
+export function rerunStart(form, source) {
+  const at = rerunChanges(form, source).map((key) => STAGES.indexOf(source.rerun_from[key]));
+  return STAGES[Math.min(STAGES.indexOf("fetch"), ...at)];
+}
+
+// Rough cost of running a review again: planning and screening only when it searches again, reading
+// only the papers whose cards can't be copied (all of them when it switches between abstracts and full
+// text, otherwise any beyond the papers read before), then drafting as for added papers.
+export function estimateRerunCost(form, source, start) {
+  const n = STAGES.indexOf(start) > STAGES.indexOf("select") ? source.selected : Number(form.max_papers) || 0;
+  const perPaper = form.abstracts_only ? 0.01 : form.use_batch ? 0.04 : 0.08;
+  const reading = (form.abstracts_only !== source.settings.abstracts_only ? n : Math.max(0, n - source.cards)) * perPaper;
+  const finding = STAGES.indexOf(start) <= STAGES.indexOf("expand") ? 0.06 : 0;
+  return [finding + reading + 0.5 + n * 0.08, finding + reading + 0.8 + n * 0.13];
+}
+
 // Calls are refused when their worst case would pass the cap; the drafting call's worst case is
 // about $1.65, so leave that much room above the estimate.
 export function suggestedCap(high) {

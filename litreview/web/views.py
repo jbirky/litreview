@@ -18,8 +18,9 @@ from ..ads import paper_from_record
 from ..fulltext import ADS_SCAN, UNPAYWALL, UPLOAD, is_ocr, upload_pages
 from ..library import Library, Paper, StoredText
 from ..papers import can_fetch
-from ..pipeline import has_newer_text
-from ..render import STRAY_KEY, Labels, cite_year, journal_abbrev, last_name, short_authors
+from ..pipeline import RERUN_FROM, has_newer_text
+from ..render import (STRAY_KEY, Labels, cite_year, journal_abbrev, last_name, rerun_changes, rerun_text,
+                      short_authors)
 from ..verify import KEY, KEY_GROUP, Draft, parse_draft, periods_of, text_problems
 
 SOURCE_NAMES = {"arxiv_src": "LaTeX source", "arxiv_html": "arXiv HTML", "arxiv_pdf": "arXiv PDF",
@@ -150,6 +151,7 @@ def run_summary(lib: Library, row) -> dict:
         "verified": sum(1 for c in cards if c["status"] == "verified"),
         "cited": len(cited_in_run(lib, run_id)),
         "has_review": lib.get(run_id, "final_draft") is not None,
+        "rerun": rerun_changes(rerun) if (rerun := lib.get(run_id, "rerun_of")) else None,
     }
 
 
@@ -185,8 +187,22 @@ def run_detail(lib: Library, run_id: str) -> dict | None:
         "additions": [{"at": a["requested_at"], "added": a.get("added"), "reread": a.get("reread"),
                        "not_found": a.get("not_found"), "previous": a.get("previous"), "done": a["done"]}
                       for a in lib.get(run_id, "additions", []) or []],
+        "rerun_of": rerun_view(lib, run_id),
+        "reruns": [{"run_id": r, "created_at": lib.run(r)["created_at"], "status": lib.run(r)["status"],
+                    "changes": rerun_changes(lib.get(r, "rerun_of"))} for r in lib.reruns(run_id)],
+        "rerun_from": RERUN_FROM,
     })
     return out
+
+
+def rerun_view(lib: Library, run_id: str) -> dict | None:
+    """The review this one runs again, and what it changed and copied."""
+    rerun = lib.get(run_id, "rerun_of")
+    source = lib.run(rerun["run_id"]) if rerun else None
+    if source is None:
+        return None
+    return {"run_id": source["run_id"], "created_at": source["created_at"], "start": rerun["start"],
+            "text": rerun_text(rerun)}
 
 
 def _segments(text: str, labels: Labels, citable: set[str]) -> list[dict]:

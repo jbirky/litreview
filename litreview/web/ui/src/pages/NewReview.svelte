@@ -1,7 +1,11 @@
 <script>
   import { get, post } from "../lib/api.js";
   import { go, href } from "../lib/router.svelte.js";
-  import { estimateCost, money, suggestedCap } from "../lib/format.js";
+  import { day, estimateCost, estimateRerunCost, money, rerunChanges, rerunStart, suggestedCap } from "../lib/format.js";
+
+  // With `from`, the form runs that finished review again as a new review of the same question,
+  // copying what the changed settings don't affect (pipeline.Run.rerun).
+  let { from = null } = $props();
 
   let overview = $state(null);
   get("/api/overview").then((o) => (overview = o)).catch(() => {});
@@ -21,26 +25,50 @@
   let error = $state("");
   let busy = $state(false);
 
-  let estimate = $derived(estimateCost(form));
+  let source = $state(null);
+  if (from)
+    get(`/api/runs/${encodeURIComponent(from)}`)
+      .then((r) => {
+        const s = r.settings;
+        form = { question: r.question, since: s.since ?? "", until: s.until ?? "", max_papers: s.max_papers,
+                 refereed_only: s.refereed_only, expand: s.expand, abstracts_only: s.abstracts_only, use_batch: s.use_batch };
+        source = r;
+      })
+      .catch((e) => (error = e.message));
+
+  let start = $derived(source ? rerunStart(form, source) : null);
+  let changed = $derived(source ? rerunChanges(form, source) : []);
+  // What a rerun starting at each stage takes from the review, besides the cards of papers read from the same text.
+  const REUSED = {
+    search: "its plan: the interpretation and the queries, searched again with the new years or filter. Papers it screened keep its scores",
+    expand: "its plan, its searches and its screening; the citation graph is followed again, and papers it screened there keep its scores",
+    select: "its plan, searches, screening and citation-graph expansion; the papers to read are chosen again",
+    fetch: "its plan, searches, screening, citation-graph expansion and choice of papers",
+  };
+
+  let estimate = $derived(source ? estimateRerunCost(form, source, start) : estimateCost(form));
   $effect(() => {
     const suggestion = suggestedCap(estimate[1]);
     if (!capTouched) cap = suggestion;
   });
-  let blocked = $derived(overview && (!overview.can_run || overview.missing_keys.length));
+  let blocked = $derived((overview && (!overview.can_run || overview.missing_keys.length)) || (from && !source));
 
   async function submit(e) {
     e.preventDefault();
     busy = true;
     error = "";
     try {
-      const run = await post("/api/runs", {
+      const settings = {
         ...form,
-        question: form.question.trim(),
         since: form.since ? Number(form.since) : null,
         until: form.until ? Number(form.until) : null,
         max_papers: Number(form.max_papers),
         cost_cap: Number(cap),
-      });
+      };
+      delete settings.question;
+      const run = source
+        ? await post(`/api/runs/${encodeURIComponent(source.run_id)}/rerun`, settings)
+        : await post("/api/runs", { ...settings, question: form.question.trim() });
       go(["review", run.run_id]);
     } catch (err) {
       error = err.message;
@@ -49,8 +77,18 @@
   }
 </script>
 
-<div class="crumbs small muted"><a href={href([])}>Reviews</a> ›</div>
-<h1>New review</h1>
+<div class="crumbs small muted">
+  <a href={href([])}>Reviews</a> ›
+  {#if from}<a href={href(["review", from])}>{source ? `Review of ${day(source.created_at)}` : "Review"}</a> ›{/if}
+</div>
+<h1>{from ? "Run this review again" : "New review"}</h1>
+{#if from}
+  <p class="intro">
+    A new review of the same question. Change any settings below. Whatever they don't affect is copied
+    from the review, along with the card of each paper read from the same text as before, so it isn't paid
+    for twice. The review is then drafted and checked again. It stays as it is.
+  </p>
+{/if}
 
 {#if overview && !overview.can_run}
   <p class="callout">This server was started read-only (<code>litreview web --read-only</code>), so it can't run reviews.</p>
@@ -64,7 +102,7 @@
 <form class="card form" onsubmit={submit}>
   <label class="field">
     <span>Question</span>
-    <textarea bind:value={form.question} rows="3" minlength="3" maxlength="500" required
+    <textarea bind:value={form.question} rows="3" minlength="3" maxlength="500" required readonly={!!from}
               placeholder="What drives radius inflation in hot Jupiters?"></textarea>
   </label>
 
@@ -81,12 +119,23 @@
     <label><input type="checkbox" bind:checked={form.abstracts_only} /> Abstracts only <span class="muted small">— much cheaper, but cards come from abstracts, not full text</span></label>
   </fieldset>
 
+  {#if source}
+    <p class="reuse small">
+      {#if changed.length}
+        Starts at <strong>{start}</strong>, copying {REUSED[start]}.
+      {:else}
+        Nothing changed, so it copies {REUSED.fetch}, reads each paper's newest text (such as a PDF uploaded
+        since), and copies the card of every paper whose text is the same.
+      {/if}
+    </p>
+  {/if}
+
   <div class="cost">
     <label class="field cap"><span>Cost cap ($)</span>
       <input type="number" min="0.5" max="100" step="0.5" bind:value={cap} oninput={() => (capTouched = true)} required />
     </label>
     <p class="small muted">
-      Estimated {money(estimate[0])}–{money(estimate[1])}. A rough guess until more reviews have run.
+      Estimated {money(estimate[0])}–{money(estimate[1])}{source ? ", assuming each paper whose text changes is read again" : ""}. A rough guess until more reviews have run.
       The run pauses before any call whose worst case would pass the cap, and drafting alone has a
       worst case of about $1.65, so leave some room. You can raise the cap and continue later.
       {#if overview}This month: {money(overview.month_spend)}{overview.monthly_credits ? ` of ${money(overview.monthly_credits)}` : ""} spent.{/if}
@@ -95,7 +144,7 @@
 
   {#if error}<p class="callout small">{error}</p>{/if}
   <div class="actions">
-    <button class="btn primary" disabled={busy || blocked}>{busy ? "Starting…" : "Start review"}</button>
+    <button class="btn primary" disabled={busy || blocked}>{busy ? "Starting…" : source ? "Run it again" : "Start review"}</button>
     <span class="muted small">It's queued and runs in the background; you can close the page.</span>
   </div>
 </form>
@@ -103,6 +152,21 @@
 <style>
   .crumbs {
     margin-bottom: 4px;
+  }
+  .intro {
+    max-width: 760px;
+    color: var(--ink-2);
+  }
+  .reuse {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 7px;
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+  }
+  textarea[readonly] {
+    color: var(--ink-2);
+    resize: none;
   }
   .form {
     padding: 18px 20px;

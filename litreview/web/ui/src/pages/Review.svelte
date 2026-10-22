@@ -96,6 +96,18 @@
       <span>{money(run.cost)}</span>
     </div>
     {#if run.interpretation}<p class="interp small"><strong>As interpreted:</strong> {run.interpretation}</p>{/if}
+    {#if run.rerun_of}
+      <p class="small muted rewritten">
+        Run again from <a href={href(["review", run.rerun_of.run_id])}>the review of {day(run.rerun_of.created_at)}</a>
+        {run.rerun_of.text}
+      </p>
+    {/if}
+    {#each run.reruns ?? [] as r}
+      <p class="small muted rewritten">
+        Run again on {day(r.created_at)} {r.changes}:
+        <a href={href(["review", r.run_id])}>see that review</a>{r.status !== "done" ? ` (${(STATUS_TEXT[r.status] ?? r.status).toLowerCase()})` : ""}.
+      </p>
+    {/each}
     {#each (run.additions ?? []).filter((a) => a.done && a.added?.length) as a}
       <p class="small muted rewritten">
         Written again on {day(a.at)} after reading {readAgain(a)}; the earlier version is in the run folder, in {a.previous}/.
@@ -106,6 +118,10 @@
         <a class="btn" href="{shareUrl}?download=1" download
            title="One HTML file that opens in any browser, with no server: the review, the timeline, the citation graph, the papers screened and read, each paper read's card with the paragraphs it cites, and refs.bib. Costs and the run report stay out.">Download shareable page</a>
         <a href={shareUrl} target="_blank" rel="noreferrer">Preview</a>
+        {#if run.can_rerun}
+          <a class="btn" href={href(["new"], { from: runId })}
+             title="A new review of the same question with other settings, such as full text instead of abstracts. What they don't change is copied, so it isn't paid for twice.">Run again…</a>
+        {/if}
       </p>
     {/if}
     {#if run.status !== "done"}
